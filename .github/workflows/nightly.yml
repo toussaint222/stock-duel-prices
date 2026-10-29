@@ -40,6 +40,8 @@ jobs:
       - name: Test on the bundled sample
         run: go test ./...
       - name: Publish new days (streams each TOPS file; nothing is saved to disk)
+        # Stops before the job limit so the commit step below still keeps the finished days.
+        timeout-minutes: 300
         run: go run . -out docs -max-days 3 -backfill "${{ inputs.backfill || '2' }}"
       # Runs even after a failed night, so finished days are kept. The commit also counts as
       # repository activity, so GitHub never pauses the schedule after 60 idle days.
@@ -50,4 +52,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs
           git commit -m "prices: run of $(date -u +%F)" || echo "nothing new to commit"
+          # Someone may have pushed pipeline changes during the run; land on top of them.
+          git pull --rebase origin main
           git push
