@@ -1,0 +1,34 @@
+# Stock Duel's catalog (engine SymbolDirectory.starter). Regenerate with:
+#   swift run --package-path engine sdsnap symbols > pipeline/symbols.txt
+AAPL
+MSFT
+NVDA
+AMD
+INTC
+GOOGL
+META
+NFLX
+DIS
+AMZN
+TSLA
+NKE
+MCD
+KO
+PEP
+COST
+WMT
+XOM
+CVX
+JPM
+V
+BAC
+UNH
+JNJ
+LLY
+BA
+CAT
+LIN
+PLD
+NEE
+SPY
+QQQ

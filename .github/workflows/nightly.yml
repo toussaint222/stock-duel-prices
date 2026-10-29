@@ -1,0 +1,53 @@
+# Nightly: publish the trading days IEX has posted since the last run, then commit the output.
+# GitHub Pages serves the docs/ folder of main ("Deploy from a branch"), so there's no Pages
+# artifact to upload. $0 rules: standard ubuntu-latest runner only, never a larger runner, and no
+# payment method on the account.
+name: nightly prices
+
+on:
+  schedule:
+    # 11:30 UTC, Tuesday to Saturday: IEX posts each day's HIST files overnight. A night that
+    # fails, or finds the file not posted yet, is retried by the next run (the cursor in
+    # docs/v1/latest.json only moves past published days).
+    - cron: "30 11 * * 2-6"
+  # Also runs when the pipeline's own code changes (including the first push). Its output commits
+  # (docs/ only, pushed with GITHUB_TOKEN) never retrigger it.
+  push:
+    branches: [main]
+    paths: ["*.go", "go.mod", "go.sum", "symbols.txt", ".github/workflows/**"]
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Older trading days to add to closes.json (each takes about 15-30 min)"
+        default: "2"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test on the bundled sample
+        run: go test ./...
+      - name: Publish new days (streams each TOPS file; nothing is saved to disk)
+        run: go run . -out docs -max-days 3 -backfill "${{ inputs.backfill || '2' }}"
+      # Runs even after a failed night, so finished days are kept. The commit also counts as
+      # repository activity, so GitHub never pauses the schedule after 60 idle days.
+      - name: Commit the output
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs
+          git commit -m "prices: run of $(date -u +%F)" || echo "nothing new to commit"
+          git push
