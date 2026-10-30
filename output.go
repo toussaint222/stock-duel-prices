@@ -156,6 +156,13 @@ func (c *Closes) add(date string, lasts map[string]*float64, symbols []string) {
 	c.AsOf = c.Days[len(c.Days)-1]
 }
 
+// readJSONIfPresent fills v from path when the file exists and parses; otherwise leaves v alone.
+func readJSONIfPresent(path string, v any) {
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, v)
+	}
+}
+
 func readLatest(out string) (*Latest, error) {
 	l := &Latest{V: SchemaVersion, Skipped: []string{}}
 	data, err := os.ReadFile(filepath.Join(out, "v1", "latest.json"))

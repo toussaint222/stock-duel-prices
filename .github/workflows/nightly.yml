@@ -6,10 +6,11 @@ name: nightly prices
 
 on:
   schedule:
-    # 11:30 UTC, Tuesday to Saturday: IEX posts each day's HIST files overnight. A night that
-    # fails, or finds the file not posted yet, is retried by the next run (the cursor in
+    # 13:15 UTC, Tuesday to Saturday: IEX posts each day's HIST files overnight, and the New York
+    # Fed publishes the previous day's SOFR at 8:00 AM New York (12:00/13:00 UTC). A night that
+    # fails, or finds a file not posted yet, is retried by the next run (the cursor in
     # docs/v1/latest.json only moves past published days).
-    - cron: "30 11 * * 2-6"
+    - cron: "15 13 * * 2-6"
   # Also runs when the pipeline's own code changes (including the first push). Its output commits
   # (docs/ only, pushed with GITHUB_TOKEN) never retrigger it.
   push:

@@ -26,10 +26,10 @@ import (
 )
 
 type config struct {
-	out, symbolsPath, date, input, listing string
-	maxDays, backfill                      int
-	now                                    time.Time
-	client                                 *http.Client
+	out, symbolsPath, date, input, listing, sofrURL string
+	maxDays, backfill                               int
+	now                                             time.Time
+	client                                          *http.Client
 }
 
 func main() {
@@ -39,6 +39,7 @@ func main() {
 	flag.StringVar(&c.date, "date", "", "publish only this New York trading day (2006-01-02)")
 	flag.StringVar(&c.input, "input", "", "read this local pcap(.gz) instead of downloading (needs -date)")
 	flag.StringVar(&c.listing, "listing", "https://iextrading.com/api/1.0/hist", "IEX HIST listing endpoint")
+	flag.StringVar(&c.sofrURL, "sofr-url", SOFRURL, "New York Fed SOFR endpoint")
 	flag.IntVar(&c.maxDays, "max-days", 3, "most new days to publish in one run")
 	flag.IntVar(&c.backfill, "backfill", 0, "older days to add to closes.json once caught up")
 	flag.Parse()
@@ -57,7 +58,15 @@ func run(c config) error {
 	if c.date != "" {
 		return publishDay(c, c.date, symbols, c.input)
 	}
-	return catchUp(c, symbols)
+	err = catchUp(c, symbols)
+	// SOFR is separate from the IEX days: a failed fetch is logged and retried next run, and
+	// never blocks prices (the app shows the bond pick as NO DATA until the rate is there).
+	if c.sofrURL != "" {
+		if serr := UpdateSOFR(c); serr != nil {
+			log.Printf("SOFR not updated: %v", serr)
+		}
+	}
+	return err
 }
 
 // catchUp publishes the weekdays after the cursor, oldest first. A weekday with no file is a

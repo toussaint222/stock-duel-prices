@@ -28,7 +28,7 @@ IEX prices reflect trading on IEX only and are a reference point, not the consol
 
 ## What runs each night
 
-`.github/workflows/nightly.yml`, at 11:30 UTC Tuesday to Saturday:
+`.github/workflows/nightly.yml`, at 13:15 UTC Tuesday to Saturday:
 
 1. `go test ./...` on the bundled sample.
 2. `go run . -out docs -max-days 3 -backfill 2`:
@@ -52,6 +52,7 @@ All paths are under `https://<owner>.github.io/<repo>/v1/`. Times are New York. 
 | `days/<yyyy-mm-dd>/<SYMBOL>.json` | One symbol's day (~4 KB for a full day). |
 | `days/<yyyy-mm-dd>/index.json` | Written **last**. Until it exists the day is pending. It lists `symbols` (files written) and `noTrades` (catalog symbols with no eligible trade that day: the app shows NO DATA). |
 | `latest.json` | `latest` (newest published day), `skipped` (holidays seen), `updated`. |
+| `sofr.json` | SOFR in percent by New York date, from the New York Fed's free API (`markets.newyorkfed.org/api/rates/secured/sofr/last/30.json`), for the app's BONDS (SOFR) pick. Weekends and holidays carry the rate in effect; a day not published yet is missing. A failed fetch never blocks prices. Credit wherever it's shown: **SOFR rate: New York Fed** (source: Federal Reserve Bank of New York). |
 | `closes.json` | Each day's last trade per symbol, oldest first, 280 trading days, in the app's `PriceSnapshot` format (`asOf`, `days`, `closes`). The app refreshes its suggestion lists from it. |
 
 A day file:
