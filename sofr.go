@@ -58,6 +58,27 @@ func UpdateSOFR(c config) error {
 	for d, r := range file.Rates {
 		fixings[d] = r
 	}
+	first := ""
+	for _, r := range feed.RefRates {
+		if r.Type == "SOFR" {
+			if _, err := time.Parse("2006-01-02", r.EffectiveDate); err != nil {
+				return fmt.Errorf("SOFR: invalid effective date")
+			}
+			if first == "" || r.EffectiveDate < first {
+				first = r.EffectiveDate
+			}
+		}
+	}
+	if first == "" {
+		return fmt.Errorf("SOFR: no fixings")
+	}
+	// Rebuild carried days in the refreshed window so a revised Friday fixing
+	// also corrects Saturday and Sunday. Older archived rates remain intact.
+	for d := range fixings {
+		if d >= first {
+			delete(fixings, d)
+		}
+	}
 	for _, r := range feed.RefRates {
 		if r.Type == "SOFR" && r.EffectiveDate != "" {
 			fixings[r.EffectiveDate] = r.PercentRate

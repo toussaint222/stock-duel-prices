@@ -269,3 +269,110 @@ func TestClosesStayInOrderAndTrimmed(t *testing.T) {
 		t.Errorf("kept %d days", len(c.Days))
 	}
 }
+
+// After the catalog grows, -refill redoes days already published for the old catalog, newest first,
+// and leaves days that already cover every symbol alone.
+func TestRefillRepublishesDaysMissingNewSymbols(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/file" {
+			http.ServeFile(w, r, "testdata/TOPS16-sample.pcapng.gz")
+			return
+		}
+		d := r.URL.Query().Get("date")
+		json.NewEncoder(w).Encode([]map[string]string{{"link": "http://" + r.Host + "/file", "date": d, "feed": "TOPS", "version": "1.6"}})
+	}))
+	defer srv.Close()
+
+	out := t.TempDir()
+	oldCatalog := []string{"AAPL"}
+	for _, d := range []string{"2017-07-07", "2017-07-10", "2017-07-11"} {
+		c := config{out: out, client: srv.Client()}
+		if err := publishDay(c, d, oldCatalog, "testdata/TOPS16-sample.pcapng.gz"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newCatalog := []string{"AAPL", "AMZN"}
+	c := config{out: out, listing: srv.URL + "/hist", refill: 2, client: srv.Client()}
+	if err := refill(c, newCatalog); err != nil {
+		t.Fatal(err)
+	}
+	index := func(d string) DayIndex {
+		var i DayIndex
+		readJSONIfPresent(filepath.Join(out, "v1", "days", d, "index.json"), &i)
+		return i
+	}
+	if !covers(index("2017-07-11"), newCatalog) || !covers(index("2017-07-10"), newCatalog) {
+		t.Errorf("newest two days not refilled: %+v %+v", index("2017-07-11"), index("2017-07-10"))
+	}
+	if covers(index("2017-07-07"), newCatalog) {
+		t.Error("refill 2 must redo only two days")
+	}
+	closes, _ := readCloses(out)
+	if len(closes.Days) != 3 || len(closes.CloseOf["AMZN"]) != 3 {
+		t.Errorf("closes %v %v", closes.Days, closes.CloseOf["AMZN"])
+	}
+	// A second run finishes the last day, and a third has nothing left to do.
+	if err := refill(c, newCatalog); err != nil || !covers(index("2017-07-07"), newCatalog) {
+		t.Errorf("second run: %v %+v", err, index("2017-07-07"))
+	}
+	c.listing = "http://127.0.0.1:1/unreachable"
+	if err := refill(c, newCatalog); err != nil {
+		t.Errorf("nothing left to refill, so no listing call: %v", err)
+	}
+}
+
+// Pruning keeps the newest KeepDays day folders and never touches closes.json; backfill past the
+// window adds closes only, so the next prune has nothing to delete again; refill skips those days.
+func TestPruneKeepsNewestDayFoldersAndAllCloses(t *testing.T) {
+	out := t.TempDir()
+	c := config{out: out, keepDays: 3}
+	sample := "testdata/TOPS16-sample.pcapng.gz"
+	days := []string{"2017-07-05", "2017-07-06", "2017-07-07", "2017-07-10", "2017-07-11"}
+	for _, d := range days {
+		if err := publishDay(c, d, []string{"AAPL"}, sample); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removed, err := pruneDays(out, 3)
+	if err != nil || len(removed) != 2 || removed[0] != "2017-07-05" || removed[1] != "2017-07-06" {
+		t.Fatalf("removed %v, %v", removed, err)
+	}
+	if got := dayFolders(out); len(got) != 3 || got[0] != "2017-07-07" {
+		t.Fatalf("kept %v", got)
+	}
+	if again, _ := pruneDays(out, 3); len(again) != 0 {
+		t.Errorf("second prune removed %v", again)
+	}
+	closes, _ := readCloses(out)
+	if len(closes.Days) != 5 || closes.Days[0] != "2017-07-05" {
+		t.Fatalf("closes lost history: %v", closes.Days)
+	}
+
+	// Backfilling an older day: closes.json gets it, no day folder appears.
+	if err := publishDay(c, "2017-07-03", []string{"AAPL"}, sample); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "v1", "days", "2017-07-03")); err == nil {
+		t.Error("backfill past the window must not write a day folder")
+	}
+	closes, _ = readCloses(out)
+	if len(closes.Days) != 6 || closes.Days[0] != "2017-07-03" {
+		t.Errorf("backfilled closes %v", closes.Days)
+	}
+	// A day inside the window still gets its folder.
+	if !keepsDayFolder(out, "2017-07-12", 3) || keepsDayFolder(out, "2017-07-06", 3) {
+		t.Error("window check")
+	}
+
+	// Refill must leave closes-only days alone (no listing call at all here).
+	c.refill = 5
+	c.listing = "http://127.0.0.1:1/unreachable"
+	if err := refill(c, []string{"AAPL"}); err != nil {
+		t.Errorf("refill touched a day it should skip: %v", err)
+	}
+
+	// keep 0 keeps everything.
+	if r, _ := pruneDays(out, 0); r != nil {
+		t.Errorf("keep 0 removed %v", r)
+	}
+}

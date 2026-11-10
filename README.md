@@ -37,6 +37,16 @@ IEX prices reflect trading on IEX only and are a reference point, not the consol
    - A weekday with no file is recorded as a holiday once a later day has a file. If no later day
      has one yet, it's **pending**: the cursor stops before it, and the next night tries again.
    - Then adds up to 2 older days to `closes.json`, until it holds 280 trading days.
+   - Then (`-refill 2`) redoes up to 2 already-published days, newest first, whose `index.json`
+     doesn't list every catalog symbol. After the catalog grows, that gives the new symbols files
+     and closes for past days instead of nulls. Days that already cover the catalog are skipped.
+   - Then (`-keep-days 90`) deletes every day folder but the newest 90 trading days (about 126
+     calendar days). It counts folders, not the clock, so a stalled pipeline deletes nothing.
+     `closes.json` keeps its full 280 days: it's carried forward on its own, never rebuilt from day
+     folders. Backfill past the window adds the day to `closes.json` only, so nothing is written just
+     to be deleted, and `-refill` skips those closes-only days. 90 trading days, not calendar days,
+     because a 3-month duel (up to 92 calendar days) reads its start day's files when it settles, up
+     to 72 hours late. A duel whose files are gone settles as NO DATA after that 72-hour timeout.
 3. Commits `docs/`, even after a failed run, so finished days are kept. `latest.json` changes every
    run, so there's always a commit, and GitHub never pauses the schedule for 60 idle days.
 
@@ -52,7 +62,7 @@ All paths are under `https://<owner>.github.io/<repo>/v1/`. Times are New York. 
 | `days/<yyyy-mm-dd>/<SYMBOL>.json` | One symbol's day (~4 KB for a full day). |
 | `days/<yyyy-mm-dd>/index.json` | Written **last**. Until it exists the day is pending. It lists `symbols` (files written) and `noTrades` (catalog symbols with no eligible trade that day: the app shows NO DATA). |
 | `latest.json` | `latest` (newest published day), `skipped` (holidays seen), `updated`. |
-| `sofr.json` | SOFR in percent by New York date, from the New York Fed's free API (`markets.newyorkfed.org/api/rates/secured/sofr/last/30.json`), for the app's BONDS (SOFR) pick. Weekends and holidays carry the rate in effect; a day not published yet is missing. A failed fetch never blocks prices. Credit wherever it's shown: **SOFR rate: New York Fed** (source: Federal Reserve Bank of New York). |
+| `sofr.json` | SOFR in percent by New York date, from the New York Fed's free API (`markets.newyorkfed.org/api/rates/secured/sofr/last/30.json`), for the app's BONDS (SOFR) pick. Weekends and holidays carry the rate in effect; a day not published yet is missing, and the app then uses the most recent earlier published rate (a duel never waits on SOFR). A failed fetch never blocks prices. Credit wherever it's shown: **SOFR rate: New York Fed** (source: Federal Reserve Bank of New York). |
 | `closes.json` | Each day's last trade per symbol, oldest first, 280 trading days, in the app's `PriceSnapshot` format (`asOf`, `days`, `closes`). The app refreshes its suggestion lists from it. |
 
 A day file:
@@ -81,8 +91,12 @@ go test ./...                      # unit tests + the bundled sample
 go run . -out /tmp/site -date 2017-07-10 -input testdata/TOPS16-sample.pcapng.gz
 ```
 
-The catalog is `symbols.txt`. When the app's catalog changes, regenerate it:
-`swift run --package-path engine sdsnap symbols > pipeline/symbols.txt` (from the app repository).
+The catalog is `symbols.txt`: every S&P 500, Nasdaq-100 and Dow 30 component plus SPY and QQQ
+(520 symbols, IEX symbology such as `BRK.B`). Its source is `engine/catalog/index-members.csv` in
+the app repository. When index membership changes, edit that file and regenerate:
+`python3 app/tools/make-catalog.py && swift run --package-path engine sdsnap symbols > pipeline/symbols.txt`.
+A full day is about 1.9 MB (520 files of ~3 KB); `closes.json` at 280 days is about 1.1 MB
+(about 0.4 MB gzipped, as Pages serves it). With 90 day folders the site stays near 170 MB.
 
 ## Licences
 

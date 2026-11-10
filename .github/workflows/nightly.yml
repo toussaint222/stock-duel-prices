@@ -21,6 +21,9 @@ on:
       backfill:
         description: "Older trading days to add to closes.json (each takes about 15-30 min)"
         default: "2"
+      refill:
+        description: "Published days to redo for catalog symbols they lack, newest first (after the catalog grows)"
+        default: "2"
 
 permissions:
   contents: write
@@ -43,7 +46,7 @@ jobs:
       - name: Publish new days (streams each TOPS file; nothing is saved to disk)
         # Stops before the job limit so the commit step below still keeps the finished days.
         timeout-minutes: 300
-        run: go run . -out docs -max-days 3 -backfill "${{ inputs.backfill || '2' }}"
+        run: go run . -out docs -max-days 3 -backfill "${{ inputs.backfill || '2' }}" -refill "${{ inputs.refill || '2' }}" -keep-days 90
       # Runs even after a failed night, so finished days are kept. The commit also counts as
       # repository activity, so GitHub never pauses the schedule after 60 idle days.
       - name: Commit the output

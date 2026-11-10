@@ -20,6 +20,11 @@ const Attribution = "Data provided for free by IEX. By accessing or using IEX Hi
 // ClosesDays is how many trading days closes.json keeps (about 13 months, enough for YTD).
 const ClosesDays = 280
 
+// KeepDays is how many trading days of day folders (v1/days/<date>/) stay published: about 126
+// calendar days. A 3-month duel (up to 92 calendar days) reads its start day's files when it settles,
+// up to 72 hours late, so 90 calendar days would be too few. closes.json doesn't depend on them.
+const KeepDays = 90
+
 var NewYork = mustLoad("America/New_York")
 
 func mustLoad(name string) *time.Location {
@@ -81,8 +86,28 @@ const source = "IEX HIST TOPS 1.6"
 
 // Publish writes one day's files under out/v1 and updates closes.json. The index goes last, so a
 // run that dies halfway leaves the day pending instead of half published.
-func Publish(out string, agg *Aggregator) error {
+func Publish(out string, agg *Aggregator) error { return publish(out, agg, true) }
+
+// PublishClosesOnly adds the day to closes.json without writing its day folder: for backfilled days
+// older than the KeepDays window, which pruning would delete again.
+func PublishClosesOnly(out string, agg *Aggregator) error { return publish(out, agg, false) }
+
+func publish(out string, agg *Aggregator, dayFiles bool) error {
 	files, noTrades := agg.Files()
+	if !dayFiles {
+		lasts := map[string]*float64{}
+		symbols := append([]string{}, noTrades...)
+		for _, f := range files {
+			lasts[f.Symbol] = f.Last
+			symbols = append(symbols, f.Symbol)
+		}
+		closes, err := readCloses(out)
+		if err != nil {
+			return err
+		}
+		closes.add(agg.session.Date, lasts, symbols)
+		return writeJSON(filepath.Join(out, "v1", "closes.json"), closes)
+	}
 	dir := filepath.Join(out, "v1", "days", agg.session.Date)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -154,6 +179,47 @@ func (c *Closes) add(date string, lasts map[string]*float64, symbols []string) {
 		}
 	}
 	c.AsOf = c.Days[len(c.Days)-1]
+}
+
+// dayFolders lists the published day folders (v1/days/<yyyy-mm-dd>), oldest first.
+func dayFolders(out string) []string {
+	entries, _ := os.ReadDir(filepath.Join(out, "v1", "days"))
+	var days []string
+	for _, e := range entries {
+		if _, err := time.Parse("2006-01-02", e.Name()); e.IsDir() && err == nil {
+			days = append(days, e.Name())
+		}
+	}
+	sort.Strings(days)
+	return days
+}
+
+// keepsDayFolder reports whether a day published now gets its day folder: always while fewer than
+// keep folders exist, otherwise only a day inside the newest keep (or one already there).
+func keepsDayFolder(out, date string, keep int) bool {
+	days := dayFolders(out)
+	if keep <= 0 || len(days) < keep {
+		return true
+	}
+	i := sort.SearchStrings(days, date)
+	return date >= days[len(days)-keep] || i < len(days) && days[i] == date
+}
+
+// pruneDays deletes every day folder but the newest keep, oldest first, and returns the dates it
+// removed. It counts folders, not the clock, so a stalled pipeline never deletes anything.
+// closes.json is untouched: it's kept on its own, never rebuilt from day folders.
+func pruneDays(out string, keep int) ([]string, error) {
+	days := dayFolders(out)
+	if keep <= 0 || len(days) <= keep {
+		return nil, nil
+	}
+	old := days[:len(days)-keep]
+	for _, d := range old {
+		if err := os.RemoveAll(filepath.Join(out, "v1", "days", d)); err != nil {
+			return nil, err
+		}
+	}
+	return old, nil
 }
 
 // readJSONIfPresent fills v from path when the file exists and parses; otherwise leaves v alone.

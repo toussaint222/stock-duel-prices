@@ -21,13 +21,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 type config struct {
 	out, symbolsPath, date, input, listing, sofrURL string
-	maxDays, backfill                               int
+	maxDays, backfill, refill, keepDays             int
 	now                                             time.Time
 	client                                          *http.Client
 }
@@ -42,6 +43,8 @@ func main() {
 	flag.StringVar(&c.sofrURL, "sofr-url", SOFRURL, "New York Fed SOFR endpoint")
 	flag.IntVar(&c.maxDays, "max-days", 3, "most new days to publish in one run")
 	flag.IntVar(&c.backfill, "backfill", 0, "older days to add to closes.json once caught up")
+	flag.IntVar(&c.refill, "refill", 0, "days already in closes.json to re-publish for catalog symbols they lack")
+	flag.IntVar(&c.keepDays, "keep-days", KeepDays, "newest trading days whose day folders stay published (0 keeps all)")
 	flag.Parse()
 	c.now = time.Now()
 	c.client = &http.Client{Timeout: 0} // a TOPS file streams for many minutes
@@ -109,6 +112,16 @@ func catchUp(c config, symbols []string) error {
 	if err := backfill(c, symbols); err != nil {
 		return err
 	}
+	if err := refill(c, symbols); err != nil {
+		return err
+	}
+	removed, err := pruneDays(c.out, c.keepDays)
+	if err != nil {
+		return err
+	}
+	if len(removed) > 0 {
+		log.Printf("pruned %d day folders (%s to %s); closes.json keeps them", len(removed), removed[0], removed[len(removed)-1])
+	}
 	return writeLatest(c.out, latest, c.now)
 }
 
@@ -137,6 +150,55 @@ func backfill(c config, symbols []string) error {
 	return nil
 }
 
+// refill re-publishes up to -refill days already in closes.json, newest first, whose index.json
+// doesn't account for every catalog symbol (in neither symbols nor noTrades). Days without a day
+// folder (older than the KeepDays window, closes only) are left alone. That happens after the
+// catalog grows: the new symbols get files and closes for those days instead of nulls. The day's
+// index is rewritten last, as always, so the day never looks pending while it's redone.
+func refill(c config, symbols []string) error {
+	if c.refill == 0 {
+		return nil
+	}
+	closes, err := readCloses(c.out)
+	if err != nil {
+		return err
+	}
+	for i, done := len(closes.Days)-1, 0; i >= 0 && done < c.refill; i-- {
+		d := closes.Days[i]
+		var index DayIndex
+		readJSONIfPresent(filepath.Join(c.out, "v1", "days", d, "index.json"), &index)
+		if index.Date == "" || covers(index, symbols) {
+			continue
+		}
+		link, err := topsLink(c, d)
+		if err != nil {
+			return err
+		}
+		if link == "" {
+			continue
+		}
+		if err := publishDay(c, d, symbols, link); err != nil {
+			return fmt.Errorf("refill %s: %w", d, err)
+		}
+		done++
+	}
+	return nil
+}
+
+// covers reports whether a day's index lists every catalog symbol, as published or as no trades.
+func covers(index DayIndex, symbols []string) bool {
+	seen := map[string]bool{}
+	for _, s := range append(append([]string{}, index.Symbols...), index.NoTrades...) {
+		seen[s] = true
+	}
+	for _, s := range symbols {
+		if !seen[s] {
+			return false
+		}
+	}
+	return true
+}
+
 func publishDay(c config, date string, symbols []string, input string) error {
 	session, err := DefaultSession(date)
 	if err != nil {
@@ -153,6 +215,10 @@ func publishDay(c config, date string, symbols []string, input string) error {
 		return err
 	}
 	log.Printf("%s: scanned in %s", date, time.Since(start).Round(time.Second))
+	if !keepsDayFolder(c.out, date, c.keepDays) {
+		// Backfill past the KeepDays window: closes only, so pruning has nothing to delete again.
+		return PublishClosesOnly(c.out, agg)
+	}
 	return Publish(c.out, agg)
 }
 

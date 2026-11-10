@@ -53,3 +53,26 @@ func TestUpdateSOFRMergesTheNewYorkFedFeed(t *testing.T) {
 		t.Errorf("rates %v", f.Rates)
 	}
 }
+
+func TestSOFRRevisionRepairsCarriedWeekendRates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"refRates":[{"effectiveDate":"2026-10-30","type":"SOFR","percentRate":4.1},{"effectiveDate":"2026-11-02","type":"SOFR","percentRate":4.2}]}`))
+	}))
+	defer srv.Close()
+	out := t.TempDir()
+	os.MkdirAll(filepath.Join(out, "v1"), 0755)
+	writeJSON(filepath.Join(out, "v1", "sofr.json"), SOFRFile{V: 1, Rates: map[string]float64{"2026-10-29": 3.9, "2026-10-30": 4, "2026-10-31": 4, "2026-11-01": 4, "2026-11-02": 4.2}})
+	if err := UpdateSOFR(config{out: out, sofrURL: srv.URL, client: srv.Client(), now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	var got SOFRFile
+	readJSONIfPresent(filepath.Join(out, "v1", "sofr.json"), &got)
+	for _, day := range []string{"2026-10-30", "2026-10-31", "2026-11-01"} {
+		if got.Rates[day] != 4.1 {
+			t.Errorf("%s: %v", day, got.Rates[day])
+		}
+	}
+	if got.Rates["2026-10-29"] != 3.9 {
+		t.Fatal("lost archived rate")
+	}
+}
